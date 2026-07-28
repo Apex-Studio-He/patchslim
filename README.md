@@ -67,12 +67,16 @@ patchslim minimize \
   --gate "pnpm test"
 ```
 
-PatchSlim prints the report and candidate patch paths when it finishes. Inspect
-the patch before applying it:
+PatchSlim writes two patches:
+
+- `apply.patch` transforms the original head into the minimized result;
+- `candidate.patch` recreates the minimized result from the merge base.
+
+To slim the current branch, inspect `apply.patch` before applying it:
 
 ```bash
-git apply --check /path/to/candidate.patch
-git apply /path/to/candidate.patch
+git apply --check /path/to/apply.patch
+git apply /path/to/apply.patch
 ```
 
 It never applies the candidate to your current checkout automatically.
@@ -147,6 +151,9 @@ content in a temporary worktree. Run it only in repositories you trust. See
 - The reducer seeks a locally minimal passing patch; it does not guarantee the
   globally smallest patch.
 - Test coverage and oracle quality determine the quality of the result.
+- Ignored directories created by `setup` are preserved between candidates.
+  Disable mutable caches inside dependency directories when reproducibility is
+  critical.
 
 ## Development
 

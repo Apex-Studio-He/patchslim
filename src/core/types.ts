@@ -89,10 +89,12 @@ export interface MinimizeSettings {
   budgetMs: number;
   outputDir?: string;
   expectedBaseFailure?: RegExp;
+  signal?: AbortSignal;
 }
 
 export interface PreflightReport {
   headRuns: ProcessResult[];
+  headGateRuns: ProcessResult[];
   baseRun?: ProcessResult;
   passed: boolean;
   code?: string;
@@ -125,6 +127,7 @@ export interface RunReport {
   artifacts: {
     directory: string;
     patch?: string;
+    applyPatch?: string;
     reportJson: string;
     reportMarkdown?: string;
   };

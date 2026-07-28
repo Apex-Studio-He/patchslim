@@ -43,6 +43,7 @@ export interface CliSettingsInput {
   timeout?: string;
   outputDir?: string;
   expectedBaseFailure?: string;
+  signal?: AbortSignal;
 }
 
 export async function resolveSettings(
@@ -106,6 +107,7 @@ export async function resolveSettings(
     ...(expectedFailureText
       ? { expectedBaseFailure: compileRegex(expectedFailureText) }
       : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
   };
 }
 

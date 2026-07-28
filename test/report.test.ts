@@ -21,7 +21,7 @@ describe("renderMarkdownReport", () => {
       },
       before: { files: 1, additions: 1, deletions: 0 },
       protected: [],
-      preflight: { headRuns: [], passed: false },
+      preflight: { headRuns: [], headGateRuns: [], passed: false },
       artifacts: {
         directory: "/repo/.git/patchslim/runs/example",
         reportJson: "/repo/.git/patchslim/runs/example/report.json",

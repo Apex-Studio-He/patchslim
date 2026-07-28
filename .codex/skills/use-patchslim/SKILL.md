@@ -31,7 +31,7 @@ After completion:
 
 1. Read the generated JSON report.
 2. Inspect the candidate patch.
-3. Run `git apply --check <candidate.patch>`.
+3. Run `git apply --check <apply.patch>` against the original head.
 4. Explain that the result is oracle-backed evidence, not proof of equivalence.
 
 Follow these rules:

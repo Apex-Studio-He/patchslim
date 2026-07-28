@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
 import { formatCommand } from "./commands.js";
+import { CliError } from "./errors.js";
 import type { CommandSpec, ProcessResult } from "./types.js";
 
 const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
@@ -27,12 +28,17 @@ const SAFE_ENV_NAMES = new Set([
 export interface RunOptions {
   cwd: string;
   extraEnv?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }
 
 export async function runCommand(
   spec: CommandSpec,
   options: RunOptions,
 ): Promise<ProcessResult> {
+  if (options.signal?.aborted) {
+    throw interruptedError();
+  }
+
   const startedAt = performance.now();
   const command = Array.isArray(spec.command) ? spec.command[0] : spec.command;
   const args = Array.isArray(spec.command) ? spec.command.slice(1) : [];
@@ -54,6 +60,7 @@ export async function runCommand(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
     let settled = false;
 
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -67,6 +74,13 @@ export async function runCommand(
       timedOut = true;
       terminateProcess(child.pid);
     }, spec.timeoutMs);
+    const abortHandler = (): void => {
+      if (!settled) {
+        aborted = true;
+        terminateProcess(child.pid);
+      }
+    };
+    options.signal?.addEventListener("abort", abortHandler, { once: true });
 
     child.once("error", (error) => {
       if (settled) {
@@ -74,7 +88,8 @@ export async function runCommand(
       }
       settled = true;
       clearTimeout(timer);
-      reject(error);
+      options.signal?.removeEventListener("abort", abortHandler);
+      reject(aborted ? interruptedError() : error);
     });
 
     child.once("close", (exitCode, signal) => {
@@ -83,6 +98,11 @@ export async function runCommand(
       }
       settled = true;
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abortHandler);
+      if (aborted) {
+        reject(interruptedError());
+        return;
+      }
       resolve({
         command: formatCommand(spec.command),
         exitCode,
@@ -94,6 +114,13 @@ export async function runCommand(
       });
     });
   });
+}
+
+function interruptedError(): CliError {
+  return new CliError(
+    "INTERRUPTED",
+    "PatchSlim was interrupted while a command was running.",
+  );
 }
 
 function buildSafeEnvironment(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

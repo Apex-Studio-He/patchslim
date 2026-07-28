@@ -14,6 +14,9 @@ PatchSlim filters common secret-like environment variable names before spawning
 commands, but this is defense in depth rather than a sandbox. Commands still
 run with the current user's filesystem and network permissions.
 
+Run reports include captured command output. Check reports before sharing them
+if tests may print credentials or private data.
+
 ## Reporting a vulnerability
 
 Please report suspected vulnerabilities privately through the repository's

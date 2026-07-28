@@ -24,6 +24,10 @@ import { readRunReport, renderHumanSummary } from "./core/report.js";
 import type { JsonValue } from "./core/types.js";
 
 const VERSION = "0.1.0";
+const shutdown = new AbortController();
+
+process.once("SIGINT", () => shutdown.abort());
+process.once("SIGTERM", () => shutdown.abort());
 
 interface GlobalOptions {
   json?: boolean;
@@ -227,6 +231,7 @@ program
         ...(options.expectBaseFailure
           ? { expectedBaseFailure: options.expectBaseFailure }
           : {}),
+        signal: shutdown.signal,
       });
       const report = await minimize(settings);
       writeSuccess("minimize", toJson(report), outputOptions(), () =>
@@ -259,7 +264,7 @@ main().catch((error: unknown) => {
     cliError.details,
     outputOptions(),
   );
-  process.exitCode = 1;
+  process.exitCode = cliError.code === "INTERRUPTED" ? 130 : 1;
 });
 
 async function main(): Promise<void> {
@@ -320,15 +325,14 @@ oracle:
 #   command: [pnpm, install, --frozen-lockfile]
 #   timeout: 15m
 
-quickGates:
-  - command: [pnpm, typecheck]
-    timeout: 5m
-
-fullGates:
-  - command: [pnpm, test]
-    timeout: 15m
-  - command: [pnpm, lint]
-    timeout: 5m
+# Optional checks:
+# quickGates:
+#   - command: [pnpm, typecheck]
+#     timeout: 5m
+#
+# fullGates:
+#   - command: [pnpm, lint]
+#     timeout: 5m
 
 protect:
   - "tests/**"

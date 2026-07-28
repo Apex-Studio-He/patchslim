@@ -20,6 +20,7 @@ export interface RepositorySnapshot {
 export interface TemporaryWorktree {
   parent: string;
   path: string;
+  preservePaths: string[];
 }
 
 export async function inspectRepository(
@@ -87,7 +88,7 @@ export async function createTemporaryWorktree(
       ["worktree", "add", "--detach", worktreePath, repository.baseSha],
       repository.root,
     );
-    return { parent, path: worktreePath };
+    return { parent, path: worktreePath, preservePaths: [] };
   } catch (error) {
     validateTemporaryParent(parent);
     await rm(parent, { recursive: true, force: true });
@@ -113,7 +114,17 @@ export async function materializePatch(
   patch: string,
 ): Promise<void> {
   await gitText(["reset", "--hard", repository.baseSha], worktree.path);
-  await gitText(["clean", "-ffd"], worktree.path);
+  await gitText(
+    [
+      "clean",
+      "-ffdx",
+      ...worktree.preservePaths.flatMap((entry) => [
+        "-e",
+        cleanExcludePattern(entry),
+      ]),
+    ],
+    worktree.path,
+  );
 
   if (patch.length === 0) {
     return;
@@ -135,12 +146,51 @@ export async function materializePatch(
   }
 }
 
+export async function captureSetupArtifacts(
+  worktree: TemporaryWorktree,
+  baselineRef: string,
+  expectedStagedPatch: string,
+): Promise<string[]> {
+  const [actualStagedPatch, modified, untracked] = await Promise.all([
+    stagedPatch(worktree.path, baselineRef),
+    gitRaw(["diff", "--name-only", "-z"], worktree.path),
+    gitRaw(["ls-files", "--others", "--exclude-standard", "-z"], worktree.path),
+  ]);
+  if (
+    actualStagedPatch !== expectedStagedPatch ||
+    modified.length > 0 ||
+    untracked.length > 0
+  ) {
+    throw new CliError(
+      "SETUP_DIRTY",
+      "The setup command changed tracked files or created unignored files.",
+      {
+        stagedPatchChanged: actualStagedPatch !== expectedStagedPatch,
+        modified: splitNullPaths(modified),
+        untracked: splitNullPaths(untracked),
+      },
+    );
+  }
+
+  const ignored = await gitRaw(
+    ["status", "--porcelain=v1", "--ignored", "-z"],
+    worktree.path,
+  );
+  const paths = ignored
+    .split("\0")
+    .filter((entry) => entry.startsWith("!! "))
+    .map((entry) => entry.slice(3))
+    .filter(Boolean);
+  worktree.preservePaths = [...new Set(paths)];
+  return worktree.preservePaths;
+}
+
 export async function stagedPatch(
-  repository: RepositoryInfo,
   worktreePath: string,
+  fromRef: string,
 ): Promise<string> {
   return await gitRaw(
-    ["diff", "--cached", "--binary", "--full-index", repository.baseSha, "--"],
+    ["diff", "--cached", "--binary", "--full-index", fromRef, "--"],
     worktreePath,
   );
 }
@@ -240,4 +290,13 @@ function validateTemporaryParent(parent: string): void {
       `Refusing to remove unexpected temporary path: ${resolved}`,
     );
   }
+}
+
+function cleanExcludePattern(relativePath: string): string {
+  const escaped = relativePath.replaceAll("\\", "\\\\").replaceAll("*", "\\*");
+  return `/${escaped.replaceAll("?", "\\?").replaceAll("[", "\\[")}`;
+}
+
+function splitNullPaths(raw: string): string[] {
+  return raw.split("\0").filter(Boolean);
 }

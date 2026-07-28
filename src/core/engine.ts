@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { formatCommand } from "./commands.js";
 import { CliError, asCliError } from "./errors.js";
 import {
+  captureSetupArtifacts,
   createRunDirectory,
   createTemporaryWorktree,
   inspectRepository,
@@ -58,6 +59,12 @@ export async function minimize(settings: MinimizeSettings): Promise<RunReport> {
     snapshot.nameStatus,
     settings.protectPatterns,
   );
+  if (changes.every((change) => change.protected)) {
+    throw new CliError(
+      "NO_REDUCIBLE_CHANGES",
+      "Every changed file is protected; there is nothing PatchSlim can minimize.",
+    );
+  }
   const runId = createRunId(startedAt, snapshot.info.headSha);
   const directory = await createRunDirectory(
     snapshot.info,
@@ -65,7 +72,11 @@ export async function minimize(settings: MinimizeSettings): Promise<RunReport> {
     settings.outputDir,
   );
   const paths = reportPaths(directory);
-  let preflight: PreflightReport = { headRuns: [], passed: false };
+  let preflight: PreflightReport = {
+    headRuns: [],
+    headGateRuns: [],
+    passed: false,
+  };
   let worktree: Awaited<ReturnType<typeof createTemporaryWorktree>> | undefined;
 
   const baseReport = {
@@ -104,9 +115,11 @@ export async function minimize(settings: MinimizeSettings): Promise<RunReport> {
 
     await materializePatch(snapshot.info, worktree, fullPatch);
     if (settings.setup) {
-      const setupResult = await runCommand(settings.setup, {
-        cwd: worktree.path,
-      });
+      const expectedStagedPatch = await stagedPatch(
+        worktree.path,
+        snapshot.info.baseSha,
+      );
+      const setupResult = await runConfiguredCommand(context, settings.setup);
       if (!passed(setupResult)) {
         throw new CliError(
           "SETUP_FAILED",
@@ -114,6 +127,11 @@ export async function minimize(settings: MinimizeSettings): Promise<RunReport> {
           { result: setupResult },
         );
       }
+      await captureSetupArtifacts(
+        worktree,
+        snapshot.info.baseSha,
+        expectedStagedPatch,
+      );
     }
 
     preflight = await runPreflight(context, changes, fullPatch);
@@ -168,8 +186,11 @@ export async function minimize(settings: MinimizeSettings): Promise<RunReport> {
       );
     }
 
-    const finalPatch = await stagedPatch(snapshot.info, worktree.path);
+    await materializePatch(snapshot.info, worktree, finalPatchInput);
+    const finalPatch = await stagedPatch(worktree.path, snapshot.info.baseSha);
+    const applyPatch = await stagedPatch(worktree.path, snapshot.info.headSha);
     await writeFile(paths.patch, finalPatch, "utf8");
+    await writeFile(paths.applyPatch, applyPatch, "utf8");
 
     const keptFiles = changes
       .filter(
@@ -197,6 +218,7 @@ export async function minimize(settings: MinimizeSettings): Promise<RunReport> {
       artifacts: {
         ...baseReport.artifacts,
         patch: paths.patch,
+        applyPatch: paths.applyPatch,
       },
       reduction: {
         fileEvaluations: fileResult.evaluations,
@@ -243,19 +265,38 @@ async function runPreflight(
   fullPatch: string,
 ): Promise<PreflightReport> {
   const headRuns: ProcessResult[] = [];
+  const headGateRuns: ProcessResult[] = [];
 
   for (let index = 0; index < context.settings.runs; index += 1) {
     await materializePatch(context.repository, context.worktree, fullPatch);
-    const result = await runCommand(context.settings.oracle, {
-      cwd: context.worktree.path,
-    });
+    const result = await runConfiguredCommand(context, context.settings.oracle);
     headRuns.push(result);
     if (!passed(result)) {
       return {
         headRuns,
+        headGateRuns,
         passed: false,
         code: "HEAD_ORACLE_UNSTABLE",
         message: `The oracle did not pass consistently on ${context.repository.headRef}.`,
+      };
+    }
+  }
+
+  const headGates = [
+    ...context.settings.quickGates,
+    ...context.settings.fullGates,
+  ];
+  for (const gate of headGates) {
+    await materializePatch(context.repository, context.worktree, fullPatch);
+    const result = await runConfiguredCommand(context, gate);
+    headGateRuns.push(result);
+    if (!passed(result)) {
+      return {
+        headRuns,
+        headGateRuns,
+        passed: false,
+        code: "HEAD_GATE_FAILED",
+        message: `A configured gate failed on ${context.repository.headRef}: ${result.command}`,
       };
     }
   }
@@ -266,12 +307,11 @@ async function runPreflight(
     context.worktree,
     protectedOnlyPatch,
   );
-  const baseRun = await runCommand(context.settings.oracle, {
-    cwd: context.worktree.path,
-  });
+  const baseRun = await runConfiguredCommand(context, context.settings.oracle);
   if (passed(baseRun)) {
     return {
       headRuns,
+      headGateRuns,
       baseRun,
       passed: false,
       code: "WEAK_ORACLE",
@@ -288,6 +328,7 @@ async function runPreflight(
   ) {
     return {
       headRuns,
+      headGateRuns,
       baseRun,
       passed: false,
       code: "UNEXPECTED_BASE_FAILURE",
@@ -296,7 +337,7 @@ async function runPreflight(
     };
   }
 
-  return { headRuns, baseRun, passed: true };
+  return { headRuns, headGateRuns, baseRun, passed: true };
 }
 
 async function evaluateCandidate(
@@ -314,25 +355,6 @@ async function evaluateCandidate(
 
   const startedAt = Date.now();
   const results: ProcessResult[] = [];
-  try {
-    await materializePatch(context.repository, context.worktree, patch);
-  } catch (error) {
-    const evaluation: Evaluation = {
-      candidateHash,
-      materialized: false,
-      passed: false,
-      cached: false,
-      durationMs: Date.now() - startedAt,
-      failedStage: "materialize",
-      results,
-      error: error instanceof Error ? error.message : String(error),
-    };
-    if (useCache) {
-      context.cache.set(candidateHash, evaluation);
-    }
-    return evaluation;
-  }
-
   const stages = [
     ...context.settings.quickGates.map((spec, index) => ({
       name: `quick-gate-${index + 1}`,
@@ -357,9 +379,28 @@ async function evaluateCandidate(
   ];
 
   for (const stage of stages) {
+    try {
+      await materializePatch(context.repository, context.worktree, patch);
+    } catch (error) {
+      const evaluation: Evaluation = {
+        candidateHash,
+        materialized: false,
+        passed: false,
+        cached: false,
+        durationMs: Date.now() - startedAt,
+        failedStage: "materialize",
+        results,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      if (useCache) {
+        context.cache.set(candidateHash, evaluation);
+      }
+      return evaluation;
+    }
+
     let result: ProcessResult;
     try {
-      result = await runCommand(stage.spec, { cwd: context.worktree.path });
+      result = await runConfiguredCommand(context, stage.spec);
     } catch (error) {
       const evaluation: Evaluation = {
         candidateHash,
@@ -411,6 +452,16 @@ async function evaluateCandidate(
 
 function passed(result: ProcessResult): boolean {
   return !result.timedOut && result.exitCode === 0;
+}
+
+async function runConfiguredCommand(
+  context: EvaluationContext,
+  spec: MinimizeSettings["oracle"],
+): Promise<ProcessResult> {
+  return await runCommand(spec, {
+    cwd: context.worktree.path,
+    ...(context.settings.signal ? { signal: context.settings.signal } : {}),
+  });
 }
 
 function candidateIncludes(

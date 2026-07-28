@@ -69,6 +69,7 @@ export function renderHumanSummary(report: RunReport): string {
     `Oracle evaluations: ${(reduction?.fileEvaluations ?? 0) + (reduction?.hunkEvaluations ?? 0)}`,
     `Cache hits:         ${reduction?.cacheHits ?? 0}`,
     "",
+    `Apply to HEAD:   ${report.artifacts.applyPatch ?? "n/a"}`,
     `Candidate patch: ${report.artifacts.patch ?? "n/a"}`,
     `Report:          ${report.artifacts.reportMarkdown ?? report.artifacts.reportJson}`,
   ].join("\n");
@@ -111,6 +112,16 @@ export function renderMarkdownReport(report: RunReport): string {
     );
   }
 
+  if (report.status === "completed") {
+    lines.push(
+      "",
+      "## Artifacts",
+      "",
+      `- Apply to the original head: \`${report.artifacts.applyPatch ?? "n/a"}\``,
+      `- Recreate the candidate from the base: \`${report.artifacts.patch ?? "n/a"}\``,
+    );
+  }
+
   if (report.error) {
     lines.push(
       "",
@@ -135,11 +146,13 @@ export function renderMarkdownReport(report: RunReport): string {
 
 export function reportPaths(directory: string): {
   patch: string;
+  applyPatch: string;
   reportJson: string;
   reportMarkdown: string;
 } {
   return {
     patch: path.join(directory, "candidate.patch"),
+    applyPatch: path.join(directory, "apply.patch"),
     reportJson: path.join(directory, "report.json"),
     reportMarkdown: path.join(directory, "report.md"),
   };
