@@ -75,6 +75,7 @@ export async function minimize(settings: MinimizeSettings): Promise<RunReport> {
   let preflight: PreflightReport = {
     headRuns: [],
     headGateRuns: [],
+    baseRuns: [],
     passed: false,
   };
   let worktree: Awaited<ReturnType<typeof createTemporaryWorktree>> | undefined;
@@ -266,6 +267,7 @@ async function runPreflight(
 ): Promise<PreflightReport> {
   const headRuns: ProcessResult[] = [];
   const headGateRuns: ProcessResult[] = [];
+  const baseRuns: ProcessResult[] = [];
 
   for (let index = 0; index < context.settings.runs; index += 1) {
     await materializePatch(context.repository, context.worktree, fullPatch);
@@ -275,6 +277,7 @@ async function runPreflight(
       return {
         headRuns,
         headGateRuns,
+        baseRuns,
         passed: false,
         code: "HEAD_ORACLE_UNSTABLE",
         message: `The oracle did not pass consistently on ${context.repository.headRef}.`,
@@ -294,6 +297,7 @@ async function runPreflight(
       return {
         headRuns,
         headGateRuns,
+        baseRuns,
         passed: false,
         code: "HEAD_GATE_FAILED",
         message: `A configured gate failed on ${context.repository.headRef}: ${result.command}`,
@@ -302,16 +306,27 @@ async function runPreflight(
   }
 
   const protectedOnlyPatch = buildFileCandidate(changes, new Set());
-  await materializePatch(
-    context.repository,
-    context.worktree,
-    protectedOnlyPatch,
-  );
-  const baseRun = await runConfiguredCommand(context, context.settings.oracle);
-  if (passed(baseRun)) {
+  for (let index = 0; index < context.settings.runs; index += 1) {
+    await materializePatch(
+      context.repository,
+      context.worktree,
+      protectedOnlyPatch,
+    );
+    baseRuns.push(await runConfiguredCommand(context, context.settings.oracle));
+  }
+  const baseRun = baseRuns[0];
+  if (!baseRun) {
+    throw new CliError(
+      "INVALID_RUNS",
+      "The oracle run count must be at least one.",
+    );
+  }
+  const passingBaseRuns = baseRuns.filter(passed).length;
+  if (passingBaseRuns === baseRuns.length) {
     return {
       headRuns,
       headGateRuns,
+      baseRuns,
       baseRun,
       passed: false,
       code: "WEAK_ORACLE",
@@ -319,16 +334,32 @@ async function runPreflight(
         "The oracle also passes with all reducible production changes removed.",
     };
   }
+  if (passingBaseRuns > 0) {
+    return {
+      headRuns,
+      headGateRuns,
+      baseRuns,
+      baseRun,
+      passed: false,
+      code: "BASE_ORACLE_UNSTABLE",
+      message:
+        "The oracle did not fail consistently with all reducible production changes removed.",
+    };
+  }
 
   if (
     context.settings.expectedBaseFailure &&
-    !context.settings.expectedBaseFailure.test(
-      `${baseRun.stdout}\n${baseRun.stderr}`,
+    baseRuns.some(
+      (result) =>
+        !context.settings.expectedBaseFailure!.test(
+          `${result.stdout}\n${result.stderr}`,
+        ),
     )
   ) {
     return {
       headRuns,
       headGateRuns,
+      baseRuns,
       baseRun,
       passed: false,
       code: "UNEXPECTED_BASE_FAILURE",
@@ -337,7 +368,13 @@ async function runPreflight(
     };
   }
 
-  return { headRuns, headGateRuns, baseRun, passed: true };
+  return {
+    headRuns,
+    headGateRuns,
+    baseRuns,
+    baseRun,
+    passed: true,
+  };
 }
 
 async function evaluateCandidate(

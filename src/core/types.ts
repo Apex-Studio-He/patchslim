@@ -95,6 +95,7 @@ export interface MinimizeSettings {
 export interface PreflightReport {
   headRuns: ProcessResult[];
   headGateRuns: ProcessResult[];
+  baseRuns: ProcessResult[];
   baseRun?: ProcessResult;
   passed: boolean;
   code?: string;

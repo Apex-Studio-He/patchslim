@@ -86,6 +86,96 @@ describe("parseChanges", () => {
       atomic: true,
     });
   });
+
+  it("keeps a rename protected when its original path is protected", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "patchslim-rename-"));
+    git(root, ["init", "-b", "main"]);
+    git(root, ["config", "user.name", "PatchSlim Tests"]);
+    git(root, ["config", "user.email", "patchslim@example.invalid"]);
+    mkdirSync(path.join(root, "tests"), { recursive: true });
+    mkdirSync(path.join(root, "src"), { recursive: true });
+    writeFileSync(
+      path.join(root, "tests", "feature.test.mjs"),
+      "test\n",
+      "utf8",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "base"]);
+    const base = git(root, ["rev-parse", "HEAD"]);
+
+    renameSync(
+      path.join(root, "tests", "feature.test.mjs"),
+      path.join(root, "src", "feature.mjs"),
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "move test"]);
+    const head = git(root, ["rev-parse", "HEAD"]);
+
+    const diff = gitOutput(root, [
+      "diff",
+      "--binary",
+      "--full-index",
+      base,
+      head,
+      "--",
+    ]);
+    const nameStatus = gitOutput(root, [
+      "diff",
+      "--name-status",
+      "-z",
+      base,
+      head,
+      "--",
+    ]);
+    const changes = parseChanges(diff, nameStatus, DEFAULT_PROTECT_PATTERNS);
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      path: "src/feature.mjs",
+      oldPath: "tests/feature.test.mjs",
+      status: "renamed",
+      atomic: true,
+      protected: true,
+    });
+  });
+
+  it("protects PatchSlim and Git control files by default", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "patchslim-control-"));
+    git(root, ["init", "-b", "main"]);
+    git(root, ["config", "user.name", "PatchSlim Tests"]);
+    git(root, ["config", "user.email", "patchslim@example.invalid"]);
+    writeFileSync(path.join(root, "source.txt"), "base\n", "utf8");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "base"]);
+    const base = git(root, ["rev-parse", "HEAD"]);
+
+    const controlFiles: Array<[string, string]> = [
+      [".patchslim.yml", "oracle: node test.mjs\n"],
+      [".gitignore", ".cache/\n"],
+      [".gitattributes", "*.bin binary\n"],
+      [".gitmodules", '[submodule "example"]\n'],
+    ];
+    for (const [file, content] of controlFiles) {
+      writeFileSync(path.join(root, file), content, "utf8");
+    }
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "add control files"]);
+    const head = git(root, ["rev-parse", "HEAD"]);
+
+    const changes = parseChanges(
+      gitOutput(root, ["diff", "--binary", "--full-index", base, head, "--"]),
+      gitOutput(root, ["diff", "--name-status", "-z", base, head, "--"]),
+      DEFAULT_PROTECT_PATTERNS,
+    );
+
+    expect(changes.map((change) => change.path)).toEqual([
+      ".gitattributes",
+      ".gitignore",
+      ".gitmodules",
+      ".patchslim.yml",
+    ]);
+    expect(changes.every((change) => change.protected)).toBe(true);
+  });
 });
 
 function gitOutput(root: string, args: string[]): string {

@@ -30,12 +30,7 @@ export async function readRunReport(reportPath: string): Promise<RunReport> {
     });
   }
 
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    !("schemaVersion" in parsed) ||
-    (parsed as { schemaVersion?: unknown }).schemaVersion !== 1
-  ) {
+  if (!isRunReport(parsed)) {
     throw new CliError(
       "REPORT_INVALID",
       `${reportPath} is not a supported PatchSlim report.`,
@@ -43,6 +38,98 @@ export async function readRunReport(reportPath: string): Promise<RunReport> {
   }
 
   return parsed as RunReport;
+}
+
+function isRunReport(value: unknown): value is RunReport {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const status = value.status;
+  if (
+    value.schemaVersion !== 1 ||
+    (status !== "completed" && status !== "failed") ||
+    !isNonEmptyString(value.runId) ||
+    !isNonEmptyString(value.startedAt) ||
+    !isNonEmptyString(value.completedAt) ||
+    !isRepository(value.repository) ||
+    !isDiffStats(value.before) ||
+    !Array.isArray(value.protected) ||
+    !value.protected.every(
+      (entry) =>
+        isRecord(entry) &&
+        isNonEmptyString(entry.path) &&
+        isNonEmptyString(entry.reason),
+    ) ||
+    !isPreflight(value.preflight) ||
+    !isArtifacts(value.artifacts)
+  ) {
+    return false;
+  }
+
+  if (status === "completed") {
+    return (
+      isDiffStats(value.after) &&
+      isRecord(value.reduction) &&
+      isRecord(value.validation)
+    );
+  }
+
+  return (
+    isRecord(value.error) &&
+    isNonEmptyString(value.error.code) &&
+    isNonEmptyString(value.error.message)
+  );
+}
+
+function isRepository(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    ["root", "commonGitDir", "baseRef", "baseSha", "headRef", "headSha"].every(
+      (key) => isNonEmptyString(value[key]),
+    )
+  );
+}
+
+function isDiffStats(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    ["files", "additions", "deletions"].every(
+      (key) =>
+        typeof value[key] === "number" &&
+        Number.isInteger(value[key]) &&
+        Number(value[key]) >= 0,
+    )
+  );
+}
+
+function isPreflight(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.headRuns) &&
+    Array.isArray(value.headGateRuns) &&
+    (value.baseRuns === undefined || Array.isArray(value.baseRuns)) &&
+    typeof value.passed === "boolean"
+  );
+}
+
+function isArtifacts(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.directory) &&
+    isNonEmptyString(value.reportJson) &&
+    ["patch", "applyPatch", "reportMarkdown"].every(
+      (key) => value[key] === undefined || isNonEmptyString(value[key]),
+    )
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 export function renderHumanSummary(report: RunReport): string {

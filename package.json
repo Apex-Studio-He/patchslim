@@ -12,13 +12,15 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/cli.ts --format esm --dts --clean",
+    "build": "tsup src/cli.ts --format esm --clean",
     "dev": "tsx src/cli.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm format:check && pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm format:check && pnpm typecheck && pnpm test && pnpm build",
+    "prepack": "npm run build",
+    "release:check": "pnpm check && pnpm audit --prod && npm pack --dry-run"
   },
   "engines": {
     "node": ">=20"
@@ -41,7 +43,7 @@
   "license": "MIT",
   "dependencies": {
     "commander": "^14.0.0",
-    "minimatch": "^10.0.3",
+    "minimatch": "^10.2.6",
     "yaml": "^2.8.1"
   },
   "devDependencies": {

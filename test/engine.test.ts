@@ -34,6 +34,8 @@ describe("minimize", () => {
     });
 
     expect(report.status).toBe("completed");
+    expect(report.before).toEqual({ files: 4, additions: 8, deletions: 3 });
+    expect(report.after).toEqual({ files: 2, additions: 6, deletions: 2 });
     expect(report.reduction?.removedFiles).toContain("src/redundant.mjs");
     expect(report.reduction?.removedFiles).toContain("src/data.bin");
     expect(report.reduction?.removedHunks).toContain("hunk:src/math.mjs:1");
@@ -245,6 +247,37 @@ describe("minimize", () => {
       code: "HEAD_ORACLE_UNSTABLE",
     });
     expect(readFileSync(stateFile, "utf8")).toBe("2");
+    expect(
+      git(fixture.root, ["worktree", "list", "--porcelain"]).match(
+        /^worktree /gm,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails closed when protected-base runs are unstable", async () => {
+    const fixture = createFixtureRepository();
+    const stateFile = path.join(
+      mkdtempSync(path.join(tmpdir(), "patchslim-base-oracle-")),
+      "runs",
+    );
+    const script = `const fs=require("node:fs");const p=${JSON.stringify(stateFile)};const n=fs.existsSync(p)?Number(fs.readFileSync(p,"utf8")):0;fs.writeFileSync(p,String(n+1));process.exit(n<2?0:n===2?1:0)`;
+
+    await expect(
+      minimize({
+        cwd: fixture.root,
+        baseRef: fixture.baseSha,
+        headRef: fixture.headSha,
+        oracle: commandSpec([process.execPath, "-e", script], 10_000),
+        quickGates: [],
+        fullGates: [],
+        protectPatterns: DEFAULT_PROTECT_PATTERNS,
+        runs: 2,
+        budgetMs: 30_000,
+      }),
+    ).rejects.toMatchObject({
+      code: "BASE_ORACLE_UNSTABLE",
+    });
+    expect(readFileSync(stateFile, "utf8")).toBe("4");
     expect(
       git(fixture.root, ["worktree", "list", "--porcelain"]).match(
         /^worktree /gm,

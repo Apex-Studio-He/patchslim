@@ -14,6 +14,7 @@ interface RawCommand {
 }
 
 interface RawConfig {
+  version?: unknown;
   base?: unknown;
   head?: unknown;
   oracle?: unknown;
@@ -26,6 +27,21 @@ interface RawConfig {
   output?: unknown;
   expectedBaseFailure?: unknown;
 }
+
+const CONFIG_KEYS = new Set<keyof RawConfig>([
+  "version",
+  "base",
+  "head",
+  "oracle",
+  "setup",
+  "quickGates",
+  "fullGates",
+  "protect",
+  "runs",
+  "budget",
+  "output",
+  "expectedBaseFailure",
+]);
 
 export interface CliSettingsInput {
   cwd: string;
@@ -61,10 +77,12 @@ export async function resolveSettings(
 
   const oracle = normalizeCommand(rawOracle, defaultTimeout, "oracle");
   const setupValue = input.setup ?? raw.setup;
+  const setupDefaultTimeout =
+    input.timeout === undefined ? parseDuration("15m") : defaultTimeout;
   const setup =
     setupValue === undefined
       ? undefined
-      : normalizeCommand(setupValue, parseDuration("15m"), "setup");
+      : normalizeCommand(setupValue, setupDefaultTimeout, "setup");
   const quickGates =
     input.quickGates.length > 0
       ? input.quickGates.map((value) => commandSpec(value, defaultTimeout))
@@ -165,7 +183,30 @@ async function loadRawConfig(
     );
   }
 
+  validateRawConfig(parsed as Record<string, unknown>, configPath);
   return parsed as RawConfig;
+}
+
+function validateRawConfig(
+  value: Record<string, unknown>,
+  configPath: string,
+): void {
+  const unknownKeys = Object.keys(value).filter(
+    (key) => !CONFIG_KEYS.has(key as keyof RawConfig),
+  );
+  if (unknownKeys.length > 0) {
+    throw new CliError(
+      "INVALID_CONFIG",
+      `${configPath} contains unknown configuration ${unknownKeys.length === 1 ? "field" : "fields"}: ${unknownKeys.join(", ")}.`,
+    );
+  }
+
+  if (value.version !== undefined && value.version !== 1) {
+    throw new CliError(
+      "INVALID_CONFIG",
+      `${configPath} uses unsupported configuration version ${String(value.version)}; expected version 1.`,
+    );
+  }
 }
 
 function normalizeCommand(

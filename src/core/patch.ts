@@ -14,6 +14,10 @@ export const DEFAULT_PROTECT_PATTERNS = [
   "**/__snapshots__/**",
   "**/fixtures/**",
   "**/migrations/**",
+  "**/.patchslim.yml",
+  "**/.gitignore",
+  "**/.gitattributes",
+  "**/.gitmodules",
   "docs/**",
   ".github/**",
   "**/*.md",
@@ -69,13 +73,19 @@ export function parseChanges(
       binary ||
       specialHeader ||
       hunks.length === 0;
-    const protectPattern = protectPatterns.find((pattern) =>
-      minimatch(entry.path, pattern, {
-        dot: true,
-        matchBase: pattern.includes("/") === false,
-      }),
-    );
-    const protectedChange = protectPattern !== undefined;
+    const protectedPath = [entry.path, entry.oldPath]
+      .filter((candidate): candidate is string => candidate !== undefined)
+      .map((candidate) => ({
+        path: candidate,
+        pattern: protectPatterns.find((pattern) =>
+          minimatch(candidate, pattern, {
+            dot: true,
+            matchBase: pattern.includes("/") === false,
+          }),
+        ),
+      }))
+      .find((match) => match.pattern !== undefined);
+    const protectedChange = protectedPath !== undefined;
     const stats = statsFromPatch(raw);
 
     return {
@@ -90,8 +100,10 @@ export function parseChanges(
       binary,
       atomic,
       protected: protectedChange,
-      ...(protectPattern
-        ? { protectReason: `matched protect pattern "${protectPattern}"` }
+      ...(protectedPath?.pattern
+        ? {
+            protectReason: `matched protect pattern "${protectedPath.pattern}"${protectedPath.path === entry.path ? "" : ` on original path "${protectedPath.path}"`}`,
+          }
         : {}),
       additions: stats.additions,
       deletions: stats.deletions,
