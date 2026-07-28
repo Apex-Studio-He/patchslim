@@ -44,7 +44,7 @@ deterministic fixture result, not a general reduction benchmark.
 
 PatchSlim requires Node.js 20 or newer.
 
-Install the signed release artifact from GitHub:
+Install the versioned release artifact from GitHub:
 
 ```bash
 npm install --global \
