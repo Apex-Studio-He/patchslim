@@ -1,0 +1,5 @@
+dist/
+node_modules/
+.patchslim/
+*.log
+.DS_Store
