@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use PatchSlim"
+  short_description: "Minimize Git diffs with test-guided checks"
+  default_prompt: "Use $use-patchslim to inspect and safely minimize this branch diff."
